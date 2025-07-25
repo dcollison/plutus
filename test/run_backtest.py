@@ -14,7 +14,7 @@ async def main():
     logger.remove()
 
     console = Console()
-    logger.add(lambda message: console.print(message, end=""))
+    logger.add(lambda message: console.print(message, end=""), level="INFO")
     logger.add("logs/plutus_backtest_{time}.log", enqueue=True)
 
     settings = Settings()

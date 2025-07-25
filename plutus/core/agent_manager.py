@@ -23,39 +23,35 @@ class AgentManager:
         """
         Load all the trading agents that are defined in the configuration.
         """
-        # Agent 1: Standard Momentum Bot
-        momentum_bot_config = {
-            "pairs": ["XBTUSD", "ETHUSD"],
-            "rsi_period": 14,
-            "rsi_oversold": 30,
-            "rsi_overbought": 70,
-            "ma_fast_hours": 10,
-            "ma_slow_hours": 20,
-            "trend_filter_ema_hours": 200,  # Long-term trend filter
-            "min_confidence": 0.5,
-        }
-        self.agents[1] = MomentumBot(
-            name="MomentumBot-Standard",
-            config=momentum_bot_config,
-            trading_client=self.trading_client,
-        )
+        # Define parameter ranges for momentum bot variations
+        rsi_periods = [10, 14, 20]
+        ma_fast_hours_options = [5, 10, 15]
+        ma_slow_hours_options = [20, 30, 40]
+        agent_id = 1
 
-        # Agent 2: A faster, more aggressive Momentum Bot
-        momentum_bot_fast_config = {
-            "pairs": ["XBTUSD", "ETHUSD"],
-            "rsi_period": 14,
-            "rsi_oversold": 30,
-            "rsi_overbought": 70,
-            "ma_fast_hours": 5,
-            "ma_slow_hours": 10,
-            "trend_filter_ema_hours": 100,  # Shorter long-term trend filter
-            "min_confidence": 0.5,
-        }
-        self.agents[2] = MomentumBot(
-            name="MomentumBot-Fast",
-            config=momentum_bot_fast_config,
-            trading_client=self.trading_client,
-        )
+        for rsi in rsi_periods:
+            for fast_ma in ma_fast_hours_options:
+                for slow_ma in ma_slow_hours_options:
+                    # Ensure fast_ma is less than slow_ma
+                    if fast_ma >= slow_ma:
+                        continue
+
+                    momentum_bot_config = {
+                        "pairs": ["XBTUSD", "ETHUSD"],
+                        "rsi_period": rsi,
+                        "rsi_oversold": 30,
+                        "rsi_overbought": 70,
+                        "ma_fast_hours": fast_ma,
+                        "ma_slow_hours": slow_ma,
+                        "trend_filter_ema_hours": 200,  # Long-term trend filter
+                        "min_confidence": 0.5,
+                    }
+                    self.agents[agent_id] = MomentumBot(
+                        name=f"MomentumBot-RSI{rsi}-MA{fast_ma}/{slow_ma}",
+                        config=momentum_bot_config,
+                        trading_client=self.trading_client,
+                    )
+                    agent_id += 1
 
     async def run_agents(
         self, data: dict[str, pd.DataFrame] = None, timestamp: pd.Timestamp = None

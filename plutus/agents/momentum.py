@@ -77,10 +77,6 @@ class MomentumBot(BaseAgent):
                 ma_slow.iloc[-1],
                 current_trend_ema,
             )
-            if signal.action != "hold":
-                logger.debug(
-                    f"{self.name}: Signal | Action: {signal.action.upper()} | Pair: {pair} | Confidence: {signal.confidence:.2f} | Reasoning: {signal.reasoning}"
-                )
 
             signals[pair] = signal
 
