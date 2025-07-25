@@ -75,19 +75,15 @@ class Plutus:
                 logger.info(f"Cycle {i_cycle:} Failed | {t_end - t_start:0.2f}s")
                 await asyncio.sleep(60)  # Wait before retrying
 
-    def stop(self):
-        """Stop the application"""
+    async def stop(self):
+        """Stop the application and clean up resources."""
         logger.info("Stopping application...")
         self.running = False
+        # Ensure the client session is closed gracefully
+        await self.trading_client.close()
 
 
-def signal_handler(signum, frame):
-    """Handle shutdown signals"""
-    print(f"Received shutdown signal {signum}...")
-    sys.exit(0)
-
-
-if __name__ == "__main__":
+def main_loop():
     # Setup logger
     logger.remove()
     logger.add(
@@ -98,13 +94,26 @@ if __name__ == "__main__":
     )
     logger.add("logs/plutus_{time}.log", enqueue=True)
 
-    # Setup signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    # Run application
     app = Plutus()
+
+    async def shutdown(sig):
+        logger.info(f"Received exit signal {sig.name}...")
+        await app.stop()
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        [task.cancel() for task in tasks]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        asyncio.get_event_loop().stop()
+
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s)))
+
     try:
-        asyncio.run(app.start())
-    except KeyboardInterrupt:
-        app.stop()
+        loop.run_until_complete(app.start())
+    finally:
+        loop.close()
+        logger.info("Shutdown complete.")
+
+
+if __name__ == "__main__":
+    main_loop()

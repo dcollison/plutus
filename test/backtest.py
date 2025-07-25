@@ -50,6 +50,9 @@ class SimulatedTradingClient(TradingClient):
                 return {}
             self.balance["USD"] += cost
             self.positions[pair] -= volume
+            # Clean up positions that are effectively zero due to floating point inaccuracies
+            if self.positions[pair] < 1e-9:
+                del self.positions[pair]
 
         trade = {
             "pair": pair,
@@ -151,13 +154,14 @@ class BacktestEngine:
         if sim_client.positions:
             logger.info("Ending positions held:")
             for pair, volume in sim_client.positions.items():
-                # Get the very last price from the historical data to value the position
-                last_price = self.data_manager.ohlc_data[pair]["close"].iloc[-1]
-                position_value = volume * last_price
-                final_portfolio_value += position_value
-                logger.info(
-                    f"  - {pair}: {volume:.4f} units @ ${last_price:,.2f} = ${position_value:,.2f}"
-                )
+                if volume > 1e-9:  # Only show positions with a meaningful amount
+                    # Get the very last price from the historical data to value the position
+                    last_price = self.data_manager.ohlc_data[pair]["close"].iloc[-1]
+                    position_value = volume * last_price
+                    final_portfolio_value += position_value
+                    logger.info(
+                        f"  - {pair}: {volume:.4f} units @ ${last_price:,.2f} = ${position_value:,.2f}"
+                    )
 
         total_trades = len(sim_client.trade_history)
         profit = final_portfolio_value - initial_balance

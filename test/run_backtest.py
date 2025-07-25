@@ -22,46 +22,48 @@ async def main():
 
     settings = Settings()
 
-    # Use the real KrakenClient to fetch historical data
-    real_client = KrakenClient(
+    # Use the real KrakenClient within a context manager to ensure the session is closed
+    async with KrakenClient(
         api_key=settings.kraken_api_key,
         api_secret=settings.kraken_api_secret,
-    )
+    ) as real_client:
+        # Use the SimulatedTradingClient for paper trading during the backtest
+        simulated_client = SimulatedTradingClient(initial_balance=10000.0)
 
-    # Use the SimulatedTradingClient for paper trading during the backtest
-    simulated_client = SimulatedTradingClient(initial_balance=10000.0)
+        # DataManager gets the REAL client to fetch data if needed.
+        data_manager = DataManager(real_client, backtesting=True)
 
-    # DataManager gets the REAL client to fetch data if needed.
-    data_manager = DataManager(real_client, backtesting=True)
+        # AgentManager gets the SIMULATED client to execute paper trades.
+        agent_manager = AgentManager(
+            settings.trading_config,
+            simulated_client,
+            data_manager,
+        )
 
-    # AgentManager gets the SIMULATED client to execute paper trades.
-    agent_manager = AgentManager(
-        settings.trading_config,
-        simulated_client,
-        data_manager,
-    )
+        # Load agents
+        agent_manager.load_agents()
 
-    # Load agents
-    agent_manager.load_agents()
+        # Define your backtest period here
+        start_date = "2025-01-01"
+        end_date = "2025-07-24"
 
-    # Define your backtest period here
-    start_date = "2025-01-01"
-    end_date = "2025-07-24"
+        # Initialise the data manager. It will use the real_client to fetch if necessary.
+        await data_manager.initialise(
+            settings.trading_config.pairs, start_date=start_date, end_date=end_date
+        )
 
-    # Initialise the data manager. It will use the real_client to fetch if necessary.
-    await data_manager.initialise(
-        settings.trading_config.pairs, start_date=start_date, end_date=end_date
-    )
+        backtest_engine = BacktestEngine(
+            agent_manager,
+            data_manager,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
-    backtest_engine = BacktestEngine(
-        agent_manager,
-        data_manager,
-        start_date=start_date,
-        end_date=end_date,
-    )
-
-    await backtest_engine.run()
+        await backtest_engine.run()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logger.exception(f"Backtest failed with an error: {e}")
