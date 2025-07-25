@@ -4,17 +4,13 @@ import sys
 import time
 from itertools import count
 
-# from plutus.core.trading_client import TradingClient
-from core.data_manager import DataManager
-from core.portfolio_manager import PortfolioManager
-from core.agent_manager import AgentManager
 from loguru import logger
 
 from plutus.config.settings import Settings
+from plutus.core.agent_manager import AgentManager
+from plutus.core.data_manager import DataManager
+from plutus.core.portfolio_manager import PortfolioManager
 from plutus.trading_clients.kraken_client import KrakenClient
-
-# from dashboard.app import create_dash_app
-# from notifications.push_notifier import PushNotifier
 
 
 class Plutus:
@@ -41,10 +37,10 @@ class Plutus:
         logger.info("Starting Plutus...")
 
         # Initialize data manager
-        await self.data_manager.initialise()
+        await self.data_manager.initialise(self.settings.trading_config.pairs)
 
         # Load and start bots
-        await self.agent_manager.load_agents()
+        self.agent_manager.load_agents()
 
         # Start trading loop
         self.running = True
@@ -74,7 +70,7 @@ class Plutus:
                 await asyncio.sleep(self.settings.update_interval)
 
             except Exception as e:
-                logger.error(f"Error in trading loop: {e}")
+                logger.exception(f"Error in trading loop: {e}")
                 t_end = time.perf_counter()
                 logger.info(f"Cycle {i_cycle:} Failed | {t_end - t_start:0.2f}s")
                 await asyncio.sleep(60)  # Wait before retrying

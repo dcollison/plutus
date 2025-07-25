@@ -50,16 +50,24 @@ class BaseAgent(ABC):
         Returns:
             Dictionary with pair names as keys and Signal objects as values
         """
-        pass
+        ...
 
     @abstractmethod
     def get_indicators(self) -> list[str]:
         """Return list of required technical indicators"""
-        pass
+        ...
 
-    @abstractmethod
-    def run(self):
-        pass
+    async def run(self, data: dict[str, pd.DataFrame]) -> None:
+        """
+        The main method that is called on each tick.
+        """
+        signals = await self.analyse(data)
+        for pair, signal in signals.items():
+            if self.validate_signal(signal, pair):
+                # In a real application, you would place a trade here
+                logger.info(
+                    f"{self.name}: Action: {signal.action.upper()} | Pair: {pair} | Confidence: {signal.confidence:.2f}"
+                )
 
     def validate_signal(self, signal: Signal, pair: str) -> bool:
         """Validate a trading signal"""

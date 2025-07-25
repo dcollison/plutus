@@ -1,4 +1,5 @@
 import pandas as pd
+from loguru import logger
 
 from plutus.agents.base_agent import BaseAgent, Signal
 
@@ -35,6 +36,10 @@ class MomentumBot(BaseAgent):
             signal = self.generate_signal(
                 current_price, current_rsi, ma_fast.iloc[-1], ma_slow.iloc[-1]
             )
+            logger.debug(
+                f"{self.name}: Signal | Action: {signal.action.upper()} | Pair: {pair} | Confidence: {signal.confidence:.2f} | Reasoning: {signal.reasoning}"
+            )
+
             signals[pair] = signal
 
         return signals
@@ -52,7 +57,7 @@ class MomentumBot(BaseAgent):
         self, price: float, rsi: float, ma_fast: float, ma_slow: float
     ) -> Signal:
         """Generate trading signal based on momentum indicators"""
-        confidence = 0.0
+        confidence = 1.0
         action = "hold"
         reasoning = ""
 
@@ -62,13 +67,26 @@ class MomentumBot(BaseAgent):
             confidence = min(0.9, (self.rsi_oversold - rsi) / self.rsi_oversold + 0.3)
             reasoning = f"RSI oversold ({rsi:.1f}) with bullish MA crossover"
 
-        # Sell signal: RSI overbought or fast MA below slow MA
-        elif rsi > self.rsi_overbought or ma_fast < ma_slow:
+        # Sell signal: RSI overbought
+        elif rsi > self.rsi_overbought:
             action = "sell"
             confidence = min(
                 0.9, (rsi - self.rsi_overbought) / (100 - self.rsi_overbought) + 0.3
             )
-            reasoning = f"RSI overbought ({rsi:.1f}) or bearish MA crossover"
+            reasoning = f"RSI overbought ({rsi:.1f})"
+        # Sell signal: Fast MA below slow MA
+        elif ma_fast < ma_slow:
+            action = "sell"
+            percentage_diff = (ma_slow - ma_fast) / ma_slow
+
+            # Scale the difference to a confidence score.
+            # Here, a 5% difference corresponds to a confidence of 0.9.
+            scaling_factor = 18
+            confidence = min(
+                percentage_diff * scaling_factor, 0.9
+            )  # Cap confidence at 0.9
+
+            reasoning = f"Fast MA ({ma_fast}) below slow MA ({ma_slow}) ({ma_fast - ma_slow:+.3f})"
 
         return Signal(
             action=action, confidence=confidence, price=price, reasoning=reasoning
