@@ -28,8 +28,13 @@ class KrakenClient(TradingClient):
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
+        await self.close()
+
+    async def close(self):
+        """Gracefully close the aiohttp client session."""
+        if self.session and not self.session.closed:
             await self.session.close()
+            logger.info("KrakenClient session closed.")
 
     def _generate_signature(self, endpoint: str, data: dict) -> str:
         """Generate API signature for authenticated requests"""
@@ -49,7 +54,7 @@ class KrakenClient(TradingClient):
         self, endpoint: str, data: dict = None, private: bool = False
     ) -> dict:
         """Make API request"""
-        if not self.session:
+        if not self.session or self.session.closed:
             self.session = aiohttp.ClientSession()
 
         url = f"{self.base_url}{endpoint}"
@@ -65,8 +70,6 @@ class KrakenClient(TradingClient):
             headers["API-Sign"] = self._generate_signature(endpoint, data)
 
         try:
-            # Private endpoints and public endpoints with data use POST.
-            # Public endpoints without data use GET.
             if private or data:
                 async with self.session.post(
                     url, data=data, headers=headers

@@ -18,26 +18,21 @@ class MeanReversionBot(BaseAgent):
     async def analyse(self, data: dict[str, pd.DataFrame]) -> dict[str, Signal]:
         signals = {}
         for pair, df in data.items():
-            # --- Data Interval Calculation ---
-            # FIX: Changed the check from < 2 to < 3 to satisfy pandas.infer_freq
-            if len(df.index) < 3:
+            if len(df.index) < 2:
                 signals[pair] = Signal(
-                    "hold", 0.0, reasoning="Not enough data to infer interval"
+                    "hold", 0.0, reasoning="Not enough data for interval"
                 )
                 continue
 
-            freq = pd.infer_freq(df.index)
-            interval_minutes = (
-                pd.to_timedelta(freq).total_seconds() / 60
-                if freq
-                else (df.index[-1] - df.index[-2]).total_seconds() / 60
-            )
-
+            # Directly calculate interval from the last two timestamps for reliability
+            interval_minutes = (df.index[-1] - df.index[-2]).total_seconds() / 60
             if interval_minutes == 0:
-                signals[pair] = Signal("hold", 0.0, reasoning="Invalid data interval")
+                signals[pair] = Signal(
+                    "hold", 0.0, reasoning="Invalid data interval (0 minutes)"
+                )
                 continue
 
-            # --- Convert Strategy Params to Periods ---
+            # Convert time-based strategy parameters to period-based
             trend_ema_periods = max(
                 1, round((self.trend_filter_ema_hours * 60) / interval_minutes)
             )
@@ -48,7 +43,7 @@ class MeanReversionBot(BaseAgent):
                 )
                 continue
 
-            # --- Indicator Calculation ---
+            # Indicator Calculation
             rolling_mean = df["close"].rolling(window=self.window).mean()
             rolling_std = df["close"].rolling(window=self.window).std()
             upper_band = rolling_mean + (rolling_std * self.std_dev)
@@ -56,19 +51,16 @@ class MeanReversionBot(BaseAgent):
             trend_ema = df["close"].ewm(span=trend_ema_periods, adjust=False).mean()
 
             current_price = df["close"].iloc[-1]
-
-            # --- Signal Generation ---
             action = "hold"
             confidence = 0.0
             reasoning = ""
-
             is_uptrend = current_price > trend_ema.iloc[-1]
 
             # Only look for buy signals (dips) in an established uptrend
             if is_uptrend and current_price < lower_band.iloc[-1]:
                 action = "buy"
                 confidence = 0.85
-                reasoning = f"Uptrend confirmed. Price hit lower Bollinger Band."
+                reasoning = "Uptrend confirmed. Price hit lower Bollinger Band."
 
             signals[pair] = Signal(
                 action=action,
@@ -76,5 +68,4 @@ class MeanReversionBot(BaseAgent):
                 price=current_price,
                 reasoning=reasoning,
             )
-
         return signals

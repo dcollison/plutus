@@ -18,30 +18,22 @@ class TrendFollowingBot(BaseAgent):
         return ["macd", "adx"]
 
     def _calculate_adx(self, df: pd.DataFrame, period: int):
-        """Calculates the Average Directional Index (ADX)."""
-        # FIX: Create a copy to avoid SettingWithCopyWarning
         df = df.copy()
-
         df["H-L"] = df["high"] - df["low"]
         df["H-PC"] = abs(df["high"] - df["close"].shift(1))
         df["L-PC"] = abs(df["low"] - df["close"].shift(1))
         df["TR"] = df[["H-L", "H-PC", "L-PC"]].max(axis=1)
-
         df["+DM"] = (df["high"] - df["high"].shift(1)) > (
             df["low"].shift(1) - df["low"]
         )
         df["+DM"] = df["+DM"].where(df["+DM"], 0) * (df["high"] - df["high"].shift(1))
-
         df["-DM"] = (df["low"].shift(1) - df["low"]) > (
             df["high"] - df["high"].shift(1)
         )
         df["-DM"] = df["-DM"].where(df["-DM"], 0) * (df["low"].shift(1) - df["low"])
-
         tr_sum = df["TR"].rolling(window=period).sum()
         plus_di = 100 * (df["+DM"].rolling(window=period).sum() / tr_sum)
         minus_di = 100 * (df["-DM"].rolling(window=period).sum() / tr_sum)
-
-        # To avoid division by zero
         dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, 1))
         adx = dx.rolling(window=period).mean()
         return adx
@@ -53,7 +45,6 @@ class TrendFollowingBot(BaseAgent):
                 signals[pair] = Signal("hold", 0.0, reasoning="Insufficient data")
                 continue
 
-            # --- Indicator Calculation ---
             exp1 = df["close"].ewm(span=self.fast_period, adjust=False).mean()
             exp2 = df["close"].ewm(span=self.slow_period, adjust=False).mean()
             macd = exp1 - exp2
@@ -68,12 +59,9 @@ class TrendFollowingBot(BaseAgent):
 
             current_price = df["close"].iloc[-1]
             current_adx = adx.iloc[-1]
-
-            # --- Signal Generation ---
             action = "hold"
             confidence = 0.0
             reasoning = ""
-
             is_strong_trend = current_adx > self.adx_threshold
             is_bullish_crossover = (
                 macd.iloc[-1] > signal_line.iloc[-1]
@@ -93,5 +81,4 @@ class TrendFollowingBot(BaseAgent):
                 price=current_price,
                 reasoning=reasoning,
             )
-
         return signals

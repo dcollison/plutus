@@ -1,5 +1,4 @@
 import asyncio
-import signal
 import sys
 import time
 from itertools import count
@@ -29,21 +28,14 @@ class Plutus:
             self.trading_client,
             self.data_manager,
         )
-        # self.notifier = PushNotifier(self.settings.notification_config)
         self.dash_app = None
         self.running = False
 
     async def start(self):
         """Start the trading application"""
         logger.info("Starting Plutus...")
-
-        # Initialize data manager
         await self.data_manager.initialise(self.settings.trading_config.pairs)
-
-        # Load and start bots
         self.agent_manager.load_agents()
-
-        # Start trading loop
         self.running = True
         await self.trading_loop()
 
@@ -55,68 +47,44 @@ class Plutus:
             t_start = time.perf_counter()
             try:
                 logger.info(f"Cycle {i_cycle:} Started")
-
-                # Update market data
                 await self.data_manager.update_live_data()
-
-                # Run active agents
                 await self.agent_manager.run_agents()
-
-                # Update portfolio
                 await self.portfolio_manager.update_portfolio()
-
                 t_end = time.perf_counter()
                 logger.info(f"Cycle {i_cycle:} Complete | {t_end - t_start:0.2f}s")
-                # Sleep until next iteration
                 await asyncio.sleep(self.settings.update_interval)
-
             except Exception as e:
                 logger.exception(f"Error in trading loop: {e}")
                 t_end = time.perf_counter()
                 logger.info(f"Cycle {i_cycle:} Failed | {t_end - t_start:0.2f}s")
-                await asyncio.sleep(60)  # Wait before retrying
+                await asyncio.sleep(60)
 
     async def stop(self):
         """Stop the application and clean up resources."""
         logger.info("Stopping application...")
         self.running = False
-        # Ensure the client session is closed gracefully
         await self.trading_client.close()
 
 
-def main_loop():
+async def main():
+    """The main entry point for the application."""
     # Setup logger
     logger.remove()
     console = Console()
     logger.add(lambda message: console.print(message, end=""))
-    # logger.add(
-    #     sys.stdout,
-    #     colorize=True,
-    #     level="DEBUG",
-    #     enqueue=True,
-    # )
     logger.add("logs/plutus_{time}.log", enqueue=True)
 
     app = Plutus()
-
-    async def shutdown(sig):
-        logger.info(f"Received exit signal {sig.name}...")
-        await app.stop()
-        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-        [task.cancel() for task in tasks]
-        await asyncio.gather(*tasks, return_exceptions=True)
-        asyncio.get_event_loop().stop()
-
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s)))
-
     try:
-        loop.run_until_complete(app.start())
+        await app.start()
+    except asyncio.CancelledError:
+        logger.info("Main task cancelled.")
     finally:
-        loop.close()
-        logger.info("Shutdown complete.")
+        await app.stop()
 
 
 if __name__ == "__main__":
-    main_loop()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Shutdown requested by user (Ctrl+C).")

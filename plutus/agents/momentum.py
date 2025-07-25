@@ -13,7 +13,6 @@ class MomentumBot(BaseAgent):
         self.rsi_overbought = config.get("rsi_overbought", 70)
         self.ma_fast_hours = config.get("ma_fast_hours", 10)
         self.ma_slow_hours = config.get("ma_slow_hours", 20)
-        # Add a long-term EMA for trend filtering
         self.trend_filter_ema_hours = config.get("trend_filter_ema_hours", 200)
 
     def get_indicators(self) -> list[str]:
@@ -21,20 +20,15 @@ class MomentumBot(BaseAgent):
 
     async def analyse(self, data: dict[str, pd.DataFrame]) -> dict[str, Signal]:
         signals = {}
-
         for pair, df in data.items():
-            if len(df.index) < 3:
+            if len(df.index) < 2:
                 signals[pair] = Signal(
-                    "hold", 0.0, reasoning="Not enough data to infer interval"
+                    "hold", 0.0, reasoning="Not enough data for interval"
                 )
                 continue
 
-            freq = pd.infer_freq(df.index)
-            if freq is None:
-                interval_minutes = (df.index[-1] - df.index[-2]).total_seconds() / 60
-            else:
-                interval_minutes = pd.to_timedelta(freq).total_seconds() / 60
-
+            # FIX: Directly calculate interval from the last two timestamps for reliability
+            interval_minutes = (df.index[-1] - df.index[-2]).total_seconds() / 60
             if interval_minutes == 0:
                 signals[pair] = Signal(
                     "hold", 0.0, reasoning="Invalid data interval (0 minutes)"
@@ -77,7 +71,6 @@ class MomentumBot(BaseAgent):
                 ma_slow.iloc[-1],
                 current_trend_ema,
             )
-
             signals[pair] = signal
 
         return signals
@@ -87,35 +80,24 @@ class MomentumBot(BaseAgent):
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
         rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        return rsi
+        return 100 - (100 / (1 + rs))
 
     def generate_signal(
         self, price: float, rsi: float, ma_fast: float, ma_slow: float, trend_ema: float
     ) -> Signal:
-        """
-        Generate a trading signal using a trend filter.
-        Only allows long positions when the price is above the long-term trend EMA,
-        and short positions when the price is below.
-        """
         action = "hold"
         confidence = 0.0
         reasoning = ""
         scaling_factor = 18
-
-        # Determine long-term trend
         is_uptrend = price > trend_ema
         is_downtrend = price < trend_ema
 
-        # --- Buy Logic (only in an uptrend) ---
         if is_uptrend and ma_fast > ma_slow and rsi < self.rsi_overbought:
             action = "buy"
             if ma_slow > 0:
                 percentage_diff = (ma_fast - ma_slow) / ma_slow
                 confidence = min(percentage_diff * scaling_factor, 0.9)
             reasoning = f"Uptrend confirmed. Bullish MA crossover and RSI not overbought ({rsi:.1f})"
-
-        # --- Sell Logic (only in a downtrend) ---
         elif is_downtrend:
             if rsi > self.rsi_overbought:
                 action = "sell"
@@ -127,7 +109,7 @@ class MomentumBot(BaseAgent):
                 if ma_slow > 0:
                     percentage_diff = (ma_slow - ma_fast) / ma_slow
                     confidence = min(percentage_diff * scaling_factor, 0.9)
-                reasoning = f"Downtrend confirmed. Bearish MA crossover."
+                reasoning = "Downtrend confirmed. Bearish MA crossover."
 
         return Signal(
             action=action, confidence=confidence, price=price, reasoning=reasoning
