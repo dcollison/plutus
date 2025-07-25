@@ -5,6 +5,7 @@ import time
 from itertools import count
 
 from loguru import logger
+from rich.console import Console
 
 from plutus.config.settings import Settings
 from plutus.core.agent_manager import AgentManager
@@ -86,12 +87,14 @@ class Plutus:
 def main_loop():
     # Setup logger
     logger.remove()
-    logger.add(
-        sys.stdout,
-        colorize=True,
-        level="DEBUG",
-        enqueue=True,
-    )
+    console = Console()
+    logger.add(lambda message: console.print(message, end=""))
+    # logger.add(
+    #     sys.stdout,
+    #     colorize=True,
+    #     level="DEBUG",
+    #     enqueue=True,
+    # )
     logger.add("logs/plutus_{time}.log", enqueue=True)
 
     app = Plutus()

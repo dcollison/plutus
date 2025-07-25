@@ -1,5 +1,5 @@
 import asyncio
-import sys
+from rich.console import Console
 from loguru import logger
 
 from plutus.config.settings import Settings
@@ -12,12 +12,9 @@ from plutus.trading_clients.kraken_client import KrakenClient
 async def main():
     # Setup logger
     logger.remove()
-    logger.add(
-        sys.stdout,
-        colorize=True,
-        level="DEBUG",
-        enqueue=True,
-    )
+
+    console = Console()
+    logger.add(lambda message: console.print(message, end=""))
     logger.add("logs/plutus_backtest_{time}.log", enqueue=True)
 
     settings = Settings()
