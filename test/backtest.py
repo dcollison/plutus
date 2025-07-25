@@ -1,5 +1,8 @@
 import pandas as pd
 from loguru import logger
+from rich.console import Console
+from rich.table import Table
+
 from plutus.core.agent_manager import AgentManager
 from plutus.core.data_manager import DataManager
 from plutus.trading_clients.trading_client import TradingClient
@@ -233,23 +236,36 @@ class BacktestEngine:
         # Benchmark Performance
         results.extend(self._calculate_benchmark_performance())
 
-        # Print Results Table
-        logger.info("\n--- Backtest Performance Summary ---")
-        logger.info(f"Initial Portfolio Value: ${initial_balance:,.2f}")
+        # --- Display Results using Rich Table ---
+        console = Console()
+        console.print()
 
-        header = f"| {'Strategy':<25} | {'Net P/L ($)':>15} | {'Net P/L (%)':>15} | {'Trades':>8} |"
-        separator = "-" * len(header)
-        logger.info(separator)
-        logger.info(header)
-        logger.info(separator)
+        table = Table(
+            title="Backtest Performance Summary",
+            show_header=True,
+            header_style="bold magenta",
+        )
+        table.add_column("Strategy", style="dim", width=25)
+        table.add_column("Net P/L ($)", justify="right")
+        table.add_column("Net P/L (%)", justify="right")
+        table.add_column("Trades", justify="center")
 
-        for result in sorted(results, key=lambda x: x["net_profit"], reverse=True):
-            row = (
-                f"| {result['strategy']:<25} | "
-                f"${result['net_profit']:>14,.2f} | "
-                f"{result['profit_pct']:>14.2f}% | "
-                f"{result['trades']:>8} |"
+        # Sort results by net profit in descending order
+        sorted_results = sorted(results, key=lambda x: x["net_profit"], reverse=True)
+
+        for result in sorted_results:
+            profit_str = f"${result['net_profit']:,.2f}"
+            profit_pct_str = f"{result['profit_pct']:.2f}%"
+
+            # Color code the profit/loss
+            style = "green" if result["net_profit"] > 0 else "red"
+
+            table.add_row(
+                result["strategy"],
+                f"[{style}]{profit_str}[/{style}]",
+                f"[{style}]{profit_pct_str}[/{style}]",
+                str(result["trades"]),
             )
-            logger.info(row)
 
-        logger.info(separator)
+        console.print(table)
+        console.print(f"[bold]Initial Portfolio Value:[/] ${initial_balance:,.2f}")
