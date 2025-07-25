@@ -2,11 +2,12 @@ import pandas as pd
 from loguru import logger
 
 from plutus.agents.base_agent import BaseAgent, Signal
+from plutus.trading_clients.trading_client import TradingClient
 
 
 class MomentumBot(BaseAgent):
-    def __init__(self, name: str, config: dict):
-        super().__init__(name, config)
+    def __init__(self, name: str, config: dict, trading_client: TradingClient):
+        super().__init__(name, config, trading_client)
         self.rsi_period = config.get("rsi_period", 14)
         self.rsi_oversold = config.get("rsi_oversold", 30)
         self.rsi_overbought = config.get("rsi_overbought", 70)
@@ -86,7 +87,7 @@ class MomentumBot(BaseAgent):
                 percentage_diff * scaling_factor, 0.9
             )  # Cap confidence at 0.9
 
-            reasoning = f"Fast MA ({ma_fast}) below slow MA ({ma_slow}) ({ma_fast - ma_slow:+.3f})"
+            reasoning = f"Fast MA ({ma_fast:.2f}) below slow MA ({ma_slow:.2f}) ({ma_fast - ma_slow:+.2f})"
 
         return Signal(
             action=action, confidence=confidence, price=price, reasoning=reasoning

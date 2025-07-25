@@ -1,8 +1,10 @@
+import pandas as pd
+from loguru import logger
+
 from plutus.agents.base_agent import BaseAgent
+from plutus.agents.momentum import MomentumBot  # Import the MomentumBot
 from plutus.core.data_manager import DataManager
 from plutus.trading_clients.trading_client import TradingClient
-from plutus.agents.momentum import MomentumBot  # Import the MomentumBot
-from loguru import logger
 
 
 class AgentManager:
@@ -31,19 +33,34 @@ class AgentManager:
             "ma_fast": 10,
             "ma_slow": 20,
         }
-        self.agents[1] = MomentumBot(name="MomentumBot", config=momentum_bot_config)
+        self.agents[1] = MomentumBot(
+            name="MomentumBot",
+            config=momentum_bot_config,
+            trading_client=self.trading_client,
+        )
 
-    async def run_agents(self):
+    async def run_agents(
+        self, data: dict[str, pd.DataFrame] = None, timestamp: pd.Timestamp = None
+    ):
         """
         Run all loaded agents. This method will fetch the required data
         for each agent and then execute the agent's strategy.
+        If data is provided (e.g., in a backtest), it will be used directly.
         """
         logger.debug(f"Running {len(self.agents)} agent(s)")
 
         for agent_id, agent in self.agents.items():
-            # Get the data required for this agent
-            agent_data = self.data_manager.get_data_for_agent(agent.pairs)
+            # If data is provided for the backtest, use it. Otherwise, fetch from DataManager.
+            if data:
+                # Filter the provided data for the pairs this agent is interested in.
+                agent_data = {
+                    pair: df for pair, df in data.items() if pair in agent.pairs
+                }
+            else:
+                # Get the data required for this agent for live trading
+                agent_data = self.data_manager.get_data_for_agent(agent.pairs)
+                timestamp = pd.Timestamp.now(tz="UTC")
 
             # If we have data, run the agent
             if agent_data:
-                await agent.run(agent_data)
+                await agent.run(agent_data, timestamp)
