@@ -57,6 +57,10 @@ class BaseAgent(ABC):
         """Return list of required technical indicators"""
         pass
 
+    @abstractmethod
+    def run(self):
+        pass
+
     def validate_signal(self, signal: Signal, pair: str) -> bool:
         """Validate a trading signal"""
         if signal.confidence < self.min_confidence:

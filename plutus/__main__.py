@@ -5,8 +5,8 @@ import time
 from itertools import count
 
 # from plutus.core.trading_client import TradingClient
-# from core.data_manager import DataManager
-# from core.portfolio_manager import PortfolioManager
+from core.data_manager import DataManager
+from core.portfolio_manager import PortfolioManager
 from core.agent_manager import AgentManager
 from loguru import logger
 
@@ -25,10 +25,12 @@ class Plutus:
             api_secret=self.settings.kraken_api_secret,
             sandbox=self.settings.use_sandbox,
         )
-        # self.data_manager = DataManager(self.trading_client)
-        # self.portfolio_manager = PortfolioManager(self.trading_client)
+        self.data_manager = DataManager(self.trading_client)
+        self.portfolio_manager = PortfolioManager(self.trading_client)
         self.agent_manager = AgentManager(
-            self.settings.trading_config, self.trading_client
+            self.settings.trading_config,
+            self.trading_client,
+            self.data_manager,
         )
         # self.notifier = PushNotifier(self.settings.notification_config)
         self.dash_app = None
@@ -85,7 +87,7 @@ class Plutus:
 
 def signal_handler(signum, frame):
     """Handle shutdown signals"""
-    print("Received shutdown signal...")
+    print(f"Received shutdown signal {signum}...")
     sys.exit(0)
 
 

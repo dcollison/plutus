@@ -10,12 +10,13 @@ from async_lru import alru_cache
 from loguru import logger
 
 from plutus.config.settings import Settings
+from plutus.trading_clients.trading_client import TradingClient
 
 SETTINGS = Settings()
 TTL: float = SETTINGS.update_interval
 
 
-class KrakenClient:
+class KrakenClient(TradingClient):
     def __init__(self, api_key: str = "", api_secret: str = "", sandbox: bool = False):
         self.api_key = api_key
         self.api_secret = api_secret
