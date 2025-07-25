@@ -12,6 +12,7 @@ class SimulatedTradingClient(TradingClient):
     """
     A simulated trading client for backtesting.
     It mimics the behavior of a real trading client but operates on historical data.
+    Each instance of this class represents a single, isolated trading account.
     """
 
     def __init__(self, initial_balance: float = 10000.0):
@@ -43,8 +44,11 @@ class SimulatedTradingClient(TradingClient):
             self.balance["USD"] -= cost
             self.positions[pair] = self.positions.get(pair, 0) + volume
         elif type_ == "sell":
-            if self.positions.get(pair, 0) < volume:
-                logger.warning(f"[{agent_name}] Not enough {pair} to sell.")
+            # Use a small tolerance for float comparison
+            if self.positions.get(pair, 0) < volume - 1e-9:
+                logger.warning(
+                    f"[{agent_name}] Not enough {pair} to sell. Has: {self.positions.get(pair, 0)}, needs: {volume}"
+                )
                 return {}
             self.balance["USD"] += cost
             self.positions[pair] -= volume
@@ -62,10 +66,12 @@ class SimulatedTradingClient(TradingClient):
             "timestamp": timestamp,
         }
         self.trade_history.append(trade)
-        logger.info(f"[{agent_name}] Simulated order placed: {trade}")
+        # Use debug level for simulated orders to reduce noise
+        logger.debug(f"[{agent_name}] Simulated order placed: {trade}")
         return {"txid": [f"sim_{len(self.trade_history)}"]}
 
     async def get_ohlc(self, pair: str, interval: int = 1, since: int = None) -> dict:
+        # This is not used by the backtester's simulated client
         return {}
 
 
@@ -96,18 +102,10 @@ class BacktestEngine:
             logger.error("No agents loaded. Aborting backtest.")
             return
 
-        first_agent = next(iter(self.agent_manager.agents.values()))
-        if not first_agent.pairs:
-            logger.error(f"Agent {first_agent.name} has no pairs assigned.")
-            return
-
-        first_pair = first_agent.pairs[0]
-        if first_pair not in self.data_manager.ohlc_data:
-            logger.error(f"No historical data for {first_pair}. Aborting backtest.")
-            return
-
+        # Determine the primary dataframe for the backtest time range
+        # This assumes all pairs have data for the same range.
+        first_pair = next(iter(self.data_manager.ohlc_data.keys()))
         historical_data = self.data_manager.ohlc_data[first_pair]
-
         backtest_range = historical_data[
             (historical_data.index >= self.start_date)
             & (historical_data.index <= self.end_date)
@@ -116,6 +114,7 @@ class BacktestEngine:
         for timestamp in backtest_range.index:
             current_data_slice = {}
             for pair, full_hist_df in self.data_manager.ohlc_data.items():
+                # Provide each agent with all data up to the current timestamp
                 current_data_slice[pair] = full_hist_df.loc[
                     full_hist_df.index <= timestamp
                 ]
@@ -131,32 +130,31 @@ class BacktestEngine:
 
     async def liquidate_all_positions(self, final_timestamp: pd.Timestamp):
         """
-        Sells all open positions at the final closing price of the simulation.
+        Sells all open positions at the final closing price of the simulation for each agent.
         """
         logger.info("Liquidating all open positions at end of simulation...")
-        for agent_id, agent in self.agent_manager.agents.items():
-            for pair, volume in list(agent.positions.items()):
-                if volume > 1e-9:
+        for agent in self.agent_manager.agents.values():
+            # Use list(agent.positions.items()) to avoid issues with modifying dict during iteration
+            for pair, position in list(agent.positions.items()):
+                if position.volume > 1e-9:
                     last_price = self.data_manager.ohlc_data[pair]["close"].iloc[-1]
                     logger.info(
-                        f"Liquidating {volume:.4f} of {pair} for {agent.name} at ${last_price:,.2f}"
+                        f"Liquidating {position.volume:.4f} of {pair} for {agent.name} at ${last_price:,.2f}"
                     )
+                    # The agent uses its own isolated trading client to liquidate
                     await agent.trading_client.place_order(
                         pair=pair,
                         type_="sell",
                         ordertype="market",
-                        volume=volume,
+                        volume=position.volume,
                         price=last_price,
                         timestamp=final_timestamp,
                         agent_name=agent.name,
                     )
-                    agent.positions.pop(pair, None)
 
-    def _calculate_benchmark_performance(self):
-        """Calculates performance for Buy & Hold and DCA strategies and returns the results."""
-        initial_balance = self.agent_manager.trading_client.initial_balance
+    def _calculate_benchmark_performance(self, initial_balance: float):
+        """Calculates performance for Buy & Hold and DCA strategies."""
         benchmark_results = []
-
         for pair in self.data_manager.pairs:
             pair_data = self.data_manager.ohlc_data[pair]
             backtest_data = pair_data[
@@ -181,85 +179,62 @@ class BacktestEngine:
                     "trades": 1,
                 }
             )
-
-            # Dollar Cost Averaging (weekly)
-            dca_schedule = pd.date_range(
-                start=self.start_date, end=self.end_date, freq="W"
-            )
-            if not dca_schedule.empty:
-                investment_per_period = initial_balance / len(dca_schedule)
-                total_coins_dca = 0
-                for investment_date in dca_schedule:
-                    closest_price_point = backtest_data.index.get_indexer(
-                        [investment_date], method="nearest"
-                    )[0]
-                    dca_price = backtest_data["close"].iloc[closest_price_point]
-                    total_coins_dca += investment_per_period / dca_price
-
-                dca_final_value = total_coins_dca * end_price
-                dca_profit = dca_final_value - initial_balance
-                benchmark_results.append(
-                    {
-                        "strategy": f"DCA (Weekly, {pair})",
-                        "net_profit": dca_profit,
-                        "profit_pct": (dca_profit / initial_balance) * 100,
-                        "trades": len(dca_schedule),
-                    }
-                )
         return benchmark_results
 
     def summarize_results(self):
-        """Prints a detailed summary table of the backtest performance for each agent and benchmarks."""
-        sim_client = self.agent_manager.trading_client
-        initial_balance = sim_client.initial_balance
+        """Prints a summary table of the backtest performance for each agent and benchmarks."""
         results = []
+        total_initial_balance = 0
 
         # Agent Performance
-        for agent_id, agent in self.agent_manager.agents.items():
-            agent_trades = [
-                t for t in sim_client.trade_history if t["agent_name"] == agent.name
-            ]
-            profit = sum(
-                -t["cost"] if t["type"] == "buy" else t["cost"] for t in agent_trades
-            )
+        for agent in self.agent_manager.agents.values():
+            # Each agent has its own client with its own history and balance
+            client = agent.trading_client
+            initial_balance = client.initial_balance
+            total_initial_balance += initial_balance
+
+            final_balance = client.balance["USD"]
+            net_profit = final_balance - initial_balance
+
             results.append(
                 {
                     "strategy": agent.name,
-                    "net_profit": profit,
+                    "net_profit": net_profit,
                     "profit_pct": (
-                        (profit / initial_balance) * 100 if initial_balance else 0
+                        (net_profit / initial_balance) * 100 if initial_balance else 0
                     ),
-                    "trades": len(agent_trades),
+                    "trades": len(client.trade_history),
                 }
             )
 
-        # Benchmark Performance
-        results.extend(self._calculate_benchmark_performance())
+        # Benchmark Performance (calculated on a single initial balance for comparison)
+        if self.agent_manager.agents:
+            first_agent_client = next(
+                iter(self.agent_manager.agents.values())
+            ).trading_client
+            benchmark_initial_balance = first_agent_client.initial_balance
+            results.extend(
+                self._calculate_benchmark_performance(benchmark_initial_balance)
+            )
 
-        # --- Display Results using Rich Table ---
         console = Console()
         console.print()
-
         table = Table(
             title="Backtest Performance Summary",
             show_header=True,
             header_style="bold magenta",
         )
-        table.add_column("Strategy", style="dim", width=25)
+        table.add_column("Strategy", style="dim", width=35)
         table.add_column("Net P/L ($)", justify="right")
         table.add_column("Net P/L (%)", justify="right")
         table.add_column("Trades", justify="center")
 
-        # Sort results by net profit in descending order
         sorted_results = sorted(results, key=lambda x: x["net_profit"], reverse=True)
 
         for result in sorted_results:
             profit_str = f"${result['net_profit']:,.2f}"
             profit_pct_str = f"{result['profit_pct']:.2f}%"
-
-            # Color code the profit/loss
             style = "green" if result["net_profit"] > 0 else "red"
-
             table.add_row(
                 result["strategy"],
                 f"[{style}]{profit_str}[/{style}]",
@@ -268,4 +243,7 @@ class BacktestEngine:
             )
 
         console.print(table)
-        console.print(f"[bold]Initial Portfolio Value:[/] ${initial_balance:,.2f}")
+        if self.agent_manager.agents:
+            console.print(
+                f"[bold]Initial Portfolio Value (per agent):[/] ${benchmark_initial_balance:,.2f}"
+            )

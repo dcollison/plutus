@@ -3,6 +3,8 @@ from loguru import logger
 
 from plutus.agents.base_agent import BaseAgent
 from plutus.agents.momentum import MomentumBot
+from plutus.agents.trend_following import TrendFollowingBot
+from plutus.agents.mean_reversion import MeanReversionBot
 from plutus.core.data_manager import DataManager
 from plutus.trading_clients.trading_client import TradingClient
 
@@ -23,35 +25,66 @@ class AgentManager:
         """
         Load all the trading agents that are defined in the configuration.
         """
-        # Define parameter ranges for momentum bot variations
-        rsi_periods = [10, 14, 20]
-        ma_fast_hours_options = [5, 10, 15]
-        ma_slow_hours_options = [20, 30, 40]
-        agent_id = 1
+        agent_id_counter = 1
+
+        # --- Load Momentum Bots ---
+        rsi_periods = [14, 21]
+        ma_fast_hours_options = [10, 20]
+        ma_slow_hours_options = [30, 50]
 
         for rsi in rsi_periods:
             for fast_ma in ma_fast_hours_options:
                 for slow_ma in ma_slow_hours_options:
-                    # Ensure fast_ma is less than slow_ma
                     if fast_ma >= slow_ma:
                         continue
-
-                    momentum_bot_config = {
+                    config = {
                         "pairs": ["XBTUSD", "ETHUSD"],
                         "rsi_period": rsi,
-                        "rsi_oversold": 30,
-                        "rsi_overbought": 70,
                         "ma_fast_hours": fast_ma,
                         "ma_slow_hours": slow_ma,
-                        "trend_filter_ema_hours": 200,  # Long-term trend filter
-                        "min_confidence": 0.5,
+                        "min_confidence": 0.6,
                     }
-                    self.agents[agent_id] = MomentumBot(
-                        name=f"MomentumBot-RSI{rsi}-MA{fast_ma}/{slow_ma}",
-                        config=momentum_bot_config,
+                    self.agents[agent_id_counter] = MomentumBot(
+                        name=f"Momentum-RSI{rsi}-MA{fast_ma}/{slow_ma}",
+                        config=config,
                         trading_client=self.trading_client,
                     )
-                    agent_id += 1
+                    agent_id_counter += 1
+
+        # --- Load Trend Following Bots ---
+        macd_settings = [(12, 26, 9), (20, 50, 10)]
+        for fast, slow, sig in macd_settings:
+            config = {
+                "pairs": ["XBTUSD"],
+                "fast_period": fast,
+                "slow_period": slow,
+                "signal_period": sig,
+                "min_confidence": 0.7,
+            }
+            self.agents[agent_id_counter] = TrendFollowingBot(
+                name=f"TrendFollow-MACD{fast}/{slow}/{sig}",
+                config=config,
+                trading_client=self.trading_client,
+            )
+            agent_id_counter += 1
+
+        # --- Load Mean Reversion Bots ---
+        bollinger_settings = [(20, 2), (30, 2.5)]
+        for window, std in bollinger_settings:
+            config = {
+                "pairs": ["ETHUSD"],
+                "window": window,
+                "std_dev": std,
+                "min_confidence": 0.75,
+            }
+            self.agents[agent_id_counter] = MeanReversionBot(
+                name=f"MeanRevert-BB{window}/{std}",
+                config=config,
+                trading_client=self.trading_client,
+            )
+            agent_id_counter += 1
+
+        logger.info(f"Loaded {len(self.agents)} agents.")
 
     async def run_agents(
         self, data: dict[str, pd.DataFrame] = None, timestamp: pd.Timestamp = None
