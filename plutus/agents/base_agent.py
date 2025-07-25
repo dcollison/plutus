@@ -79,6 +79,7 @@ class BaseAgent(ABC):
                         volume=position_size,
                         price=signal.price,
                         timestamp=timestamp,
+                        agent_name=self.name,  # Pass agent name
                     )
                     if order_result:
                         self.positions[pair] = (
@@ -95,6 +96,7 @@ class BaseAgent(ABC):
                             volume=current_position,
                             price=signal.price,
                             timestamp=timestamp,
+                            agent_name=self.name,  # Pass agent name
                         )
                         if order_result:
                             self.positions.pop(pair, None)

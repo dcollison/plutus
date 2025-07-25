@@ -11,8 +11,9 @@ class MomentumBot(BaseAgent):
         self.rsi_period = config.get("rsi_period", 14)
         self.rsi_oversold = config.get("rsi_oversold", 30)
         self.rsi_overbought = config.get("rsi_overbought", 70)
-        self.ma_fast = config.get("ma_fast", 10)
-        self.ma_slow = config.get("ma_slow", 20)
+        # Strategy parameters are now time-based (in hours)
+        self.ma_fast_hours = config.get("ma_fast_hours", 10)
+        self.ma_slow_hours = config.get("ma_slow_hours", 20)
 
     def get_indicators(self) -> list[str]:
         return ["rsi", "sma", "volume"]
@@ -21,19 +22,50 @@ class MomentumBot(BaseAgent):
         signals = {}
 
         for pair, df in data.items():
-            if df.empty or len(df) < max(self.rsi_period, self.ma_slow):
-                signals[pair] = Signal("hold", 0.0, reasoning="Insufficient data")
+            # Add a guard clause to ensure there are enough data points to infer frequency.
+            if len(df.index) < 3:
+                signals[pair] = Signal(
+                    "hold", 0.0, reasoning="Not enough data to infer interval"
+                )
                 continue
 
-            # Calculate indicators
+            # Infer the data interval in minutes from the DataFrame's index
+            freq = pd.infer_freq(df.index)
+            if freq is None:
+                # If frequency can't be inferred, fall back to calculating from the last two timestamps
+                interval_minutes = (df.index[-1] - df.index[-2]).total_seconds() / 60
+            else:
+                interval_minutes = pd.to_timedelta(freq).total_seconds() / 60
+
+            # Prevent division by zero if interval is 0 (e.g. duplicate timestamps)
+            if interval_minutes == 0:
+                signals[pair] = Signal(
+                    "hold", 0.0, reasoning="Invalid data interval (0 minutes)"
+                )
+                continue
+
+            # Convert time-based strategy (e.g., 10 hours) to period-based strategy
+            ma_fast_periods = max(
+                1, round((self.ma_fast_hours * 60) / interval_minutes)
+            )
+            ma_slow_periods = max(
+                1, round((self.ma_slow_hours * 60) / interval_minutes)
+            )
+
+            if df.empty or len(df) < max(self.rsi_period, ma_slow_periods):
+                signals[pair] = Signal(
+                    "hold", 0.0, reasoning="Insufficient data for indicators"
+                )
+                continue
+
+            # Calculate indicators with the adjusted periods
             rsi = self.calculate_rsi(df["close"], self.rsi_period)
-            ma_fast = df["close"].rolling(self.ma_fast).mean()
-            ma_slow = df["close"].rolling(self.ma_slow).mean()
+            ma_fast = df["close"].rolling(ma_fast_periods).mean()
+            ma_slow = df["close"].rolling(ma_slow_periods).mean()
 
             current_price = df["close"].iloc[-1]
             current_rsi = rsi.iloc[-1]
 
-            # Generate signal
             signal = self.generate_signal(
                 current_price, current_rsi, ma_fast.iloc[-1], ma_slow.iloc[-1]
             )
@@ -47,7 +79,6 @@ class MomentumBot(BaseAgent):
         return signals
 
     def calculate_rsi(self, prices: pd.Series, period: int) -> pd.Series:
-        """Calculate RSI indicator"""
         delta = prices.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -92,7 +123,7 @@ class MomentumBot(BaseAgent):
             if ma_slow > 0:
                 percentage_diff = (ma_fast - ma_slow) / ma_slow
                 confidence = min(percentage_diff * scaling_factor, 0.9)
-            reasoning = f"Bullish MA crossover (fast: {ma_fast:.2f} > slow: {ma_slow:.2f}) and RSI is not overbought ({rsi:.1f})"
+            reasoning = f"Bullish MA crossover (fast: {ma_fast:.2f} > slow: {ma_slow:.2f}) and RSI not overbought ({rsi:.1f})"
 
         return Signal(
             action=action, confidence=confidence, price=price, reasoning=reasoning
