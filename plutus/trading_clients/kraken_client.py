@@ -1,0 +1,211 @@
+import asyncio
+import base64
+import hashlib
+import hmac
+import time
+from urllib.parse import urlencode
+
+import aiohttp
+from async_lru import alru_cache
+from loguru import logger
+
+from plutus.config.settings import Settings
+
+SETTINGS = Settings()
+TTL: float = SETTINGS.update_interval
+
+
+class KrakenClient:
+    def __init__(self, api_key: str = "", api_secret: str = "", sandbox: bool = False):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        # Kraken doesn't have a public sandbox - all testing must be done with small amounts on live API
+        # or use paper trading logic in your application
+        self.base_url = "https://api.kraken.com"
+        self.sandbox = sandbox  # For internal logic to prevent actual trading
+        self.session = None
+
+    async def __aenter__(self):
+        self.session = aiohttp.ClientSession()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.session:
+            await self.session.close()
+
+    def _generate_signature(self, endpoint: str, data: dict) -> str:
+        """Generate API signature for authenticated requests"""
+        postdata = urlencode(data)
+        encoded = (str(data["nonce"]) + postdata).encode()
+        message = endpoint.encode() + hashlib.sha256(encoded).digest()
+
+        try:
+            signature = hmac.new(
+                base64.b64decode(self.api_secret), message, hashlib.sha512
+            )
+            return base64.b64encode(signature.digest()).decode()
+        except Exception as e:
+            logger.error(f"Error generating signature: {e}")
+            raise Exception("Invalid API secret format")
+
+    async def _request(
+        self, endpoint: str, data: dict = None, private: bool = False
+    ) -> dict:
+        """Make API request"""
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+
+        url = f"{self.base_url}{endpoint}"
+        headers = {"User-Agent": "Kraken REST API"}
+
+        if private:
+            if not self.api_key or not self.api_secret:
+                raise Exception("API key and secret required for private endpoints")
+
+            if not data:
+                data = {}
+            data["nonce"] = str(int(time.time() * 1000000))  # Microsecond precision
+            headers["API-Key"] = self.api_key
+            headers["API-Sign"] = self._generate_signature(endpoint, data)
+
+        try:
+            if private or data:
+                async with self.session.post(
+                    url, data=data, headers=headers
+                ) as response:
+                    result = await response.json()
+            else:
+                async with self.session.get(url, headers=headers) as response:
+                    result = await response.json()
+
+            if result.get("error") and result["error"]:
+                error_msg = (
+                    ", ".join(result["error"])
+                    if isinstance(result["error"], list)
+                    else result["error"]
+                )
+                raise Exception(f"Kraken API Error: {error_msg}")
+
+            return result.get("result", {})
+
+        except aiohttp.ContentTypeError:
+            raise Exception("Invalid response from Kraken API - check endpoint URL")
+        except Exception as e:
+            logger.error(f"API request failed for {endpoint}: {e}")
+            raise
+
+    # Public API methods
+    @alru_cache(ttl=TTL)
+    async def get_server_time(self) -> dict:
+        """Get server time"""
+        return await self._request("/0/public/Time")
+
+    @alru_cache(ttl=TTL)
+    async def get_asset_info(self, assets: tuple[str] = None) -> dict:
+        """Get asset information"""
+        data = {}
+        if assets:
+            data["asset"] = ",".join(assets)
+        return await self._request("/0/public/Assets", data)
+
+    @alru_cache(ttl=TTL)
+    async def get_tradable_pairs(self, pairs: tuple[str] = None) -> dict:
+        """Get tradable asset pairs"""
+        data = {}
+        if pairs:
+            data["pair"] = ",".join(pairs)
+        return await self._request("/0/public/AssetPairs", data)
+
+    @alru_cache(ttl=TTL)
+    async def get_ticker(self, pairs: tuple[str]) -> dict:
+        """Get ticker information"""
+        data = {"pair": ",".join(pairs)}
+        return await self._request("/0/public/Ticker", data)
+
+    @alru_cache(ttl=TTL)
+    async def get_ohlc(self, pair: str, interval: int = 1, since: int = None) -> dict:
+        """Get OHLC data"""
+        data = {"pair": pair, "interval": interval}
+        if since:
+            data["since"] = since
+        return await self._request("/0/public/OHLC", data)
+
+    @alru_cache(ttl=TTL)
+    async def get_order_book(self, pair: str, count: int = 100) -> dict:
+        """Get order book"""
+        data = {"pair": pair, "count": count}
+        return await self._request("/0/public/Depth", data)
+
+    @alru_cache(ttl=TTL)
+    async def get_recent_trades(self, pair: str, since: int = None) -> dict:
+        """Get recent trades"""
+        data = {"pair": pair}
+        if since:
+            data["since"] = since
+        return await self._request("/0/public/Trades", data)
+
+    # Private API methods
+    async def get_account_balance(self) -> dict:
+        """Get account balance"""
+        return await self._request("/0/private/Balance", {}, private=True)
+
+    async def get_trade_balance(self, asset: str = "ZUSD") -> dict:
+        """Get trade balance"""
+        data = {"asset": asset}
+        return await self._request("/0/private/TradeBalance", data, private=True)
+
+    async def get_open_orders(self) -> dict:
+        """Get open orders"""
+        return await self._request("/0/private/OpenOrders", {}, private=True)
+
+    async def get_closed_orders(self, start: int = None, end: int = None) -> dict:
+        """Get closed orders"""
+        data = {}
+        if start:
+            data["start"] = start
+        if end:
+            data["end"] = end
+        return await self._request("/0/private/ClosedOrders", data, private=True)
+
+    async def place_order(
+        self,
+        pair: str,
+        type_: str,
+        ordertype: str,
+        volume: float,
+        price: float = None,
+        **kwargs,
+    ) -> dict:
+        """Place an order"""
+        # Safety check for sandbox mode
+        if self.sandbox:
+            logger.warning("SANDBOX MODE: Order would be placed but not executed")
+            return {
+                "txid": ["SANDBOX_ORDER_" + str(int(time.time()))],
+                "descr": {"order": f"{type_} {volume} {pair} @ {ordertype}"},
+            }
+
+        data = {
+            "pair": pair,
+            "type": type_,  # buy/sell
+            "ordertype": ordertype,  # market/limit
+            "volume": str(volume),
+        }
+
+        if price:
+            data["price"] = str(price)
+
+        # Add optional parameters
+        for key, value in kwargs.items():
+            data[key] = str(value)
+
+        return await self._request("/0/private/AddOrder", data, private=True)
+
+    async def cancel_order(self, txid: str) -> dict:
+        """Cancel an order"""
+        if self.sandbox:
+            logger.warning("SANDBOX MODE: Order cancellation simulated")
+            return {"count": 1}
+
+        data = {"txid": txid}
+        return await self._request("/0/private/CancelOrder", data, private=True)
