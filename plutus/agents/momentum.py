@@ -1,6 +1,6 @@
 import pandas as pd
 
-from plutus.agents.base import BaseAgent, Signal
+from plutus.agents.base_agent import BaseAgent, Signal
 
 
 class MomentumBot(BaseAgent):
