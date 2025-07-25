@@ -122,60 +122,134 @@ class BacktestEngine:
                     data=current_data_slice, timestamp=timestamp
                 )
 
+        await self.liquidate_all_positions(backtest_range.index[-1])
         logger.info("Backtest finished.")
         self.summarize_results()
 
+    async def liquidate_all_positions(self, final_timestamp: pd.Timestamp):
+        """
+        Sells all open positions at the final closing price of the simulation.
+        """
+        logger.info("Liquidating all open positions at end of simulation...")
+        for agent_id, agent in self.agent_manager.agents.items():
+            for pair, volume in list(agent.positions.items()):
+                if volume > 1e-9:
+                    last_price = self.data_manager.ohlc_data[pair]["close"].iloc[-1]
+                    logger.info(
+                        f"Liquidating {volume:.4f} of {pair} for {agent.name} at ${last_price:,.2f}"
+                    )
+                    await agent.trading_client.place_order(
+                        pair=pair,
+                        type_="sell",
+                        ordertype="market",
+                        volume=volume,
+                        price=last_price,
+                        timestamp=final_timestamp,
+                        agent_name=agent.name,
+                    )
+                    agent.positions.pop(pair, None)
+
+    def _calculate_benchmark_performance(self):
+        """Calculates performance for Buy & Hold and DCA strategies and returns the results."""
+        initial_balance = self.agent_manager.trading_client.initial_balance
+        benchmark_results = []
+
+        for pair in self.data_manager.pairs:
+            pair_data = self.data_manager.ohlc_data[pair]
+            backtest_data = pair_data[
+                (pair_data.index >= self.start_date)
+                & (pair_data.index <= self.end_date)
+            ]
+            if backtest_data.empty:
+                continue
+
+            start_price = backtest_data["close"].iloc[0]
+            end_price = backtest_data["close"].iloc[-1]
+
+            # Buy and Hold
+            bnh_coins = initial_balance / start_price
+            bnh_final_value = bnh_coins * end_price
+            bnh_profit = bnh_final_value - initial_balance
+            benchmark_results.append(
+                {
+                    "strategy": f"Buy & Hold ({pair})",
+                    "net_profit": bnh_profit,
+                    "profit_pct": (bnh_profit / initial_balance) * 100,
+                    "trades": 1,
+                }
+            )
+
+            # Dollar Cost Averaging (weekly)
+            dca_schedule = pd.date_range(
+                start=self.start_date, end=self.end_date, freq="W"
+            )
+            if not dca_schedule.empty:
+                investment_per_period = initial_balance / len(dca_schedule)
+                total_coins_dca = 0
+                for investment_date in dca_schedule:
+                    closest_price_point = backtest_data.index.get_indexer(
+                        [investment_date], method="nearest"
+                    )[0]
+                    dca_price = backtest_data["close"].iloc[closest_price_point]
+                    total_coins_dca += investment_per_period / dca_price
+
+                dca_final_value = total_coins_dca * end_price
+                dca_profit = dca_final_value - initial_balance
+                benchmark_results.append(
+                    {
+                        "strategy": f"DCA (Weekly, {pair})",
+                        "net_profit": dca_profit,
+                        "profit_pct": (dca_profit / initial_balance) * 100,
+                        "trades": len(dca_schedule),
+                    }
+                )
+        return benchmark_results
+
     def summarize_results(self):
-        """
-        Prints a detailed summary of the backtest performance for each agent.
-        """
+        """Prints a detailed summary table of the backtest performance for each agent and benchmarks."""
         sim_client = self.agent_manager.trading_client
         initial_balance = sim_client.initial_balance
+        results = []
 
-        logger.info("--- Backtest Summary ---")
-        logger.info(f"Initial Portfolio Value: ${initial_balance:,.2f}")
-
+        # Agent Performance
         for agent_id, agent in self.agent_manager.agents.items():
             agent_trades = [
                 t for t in sim_client.trade_history if t["agent_name"] == agent.name
             ]
+            profit = sum(
+                -t["cost"] if t["type"] == "buy" else t["cost"] for t in agent_trades
+            )
+            results.append(
+                {
+                    "strategy": agent.name,
+                    "net_profit": profit,
+                    "profit_pct": (
+                        (profit / initial_balance) * 100 if initial_balance else 0
+                    ),
+                    "trades": len(agent_trades),
+                }
+            )
 
-            if not agent_trades:
-                logger.info(f"\n--- Results for {agent.name} ---")
-                logger.info("No trades executed.")
-                continue
+        # Benchmark Performance
+        results.extend(self._calculate_benchmark_performance())
 
-            profit = 0
-            for trade in agent_trades:
-                if trade["type"] == "buy":
-                    profit -= trade["cost"]
-                else:  # sell
-                    profit += trade["cost"]
+        # Print Results Table
+        logger.info("\n--- Backtest Performance Summary ---")
+        logger.info(f"Initial Portfolio Value: ${initial_balance:,.2f}")
 
-            final_positions_value = 0
-            if agent.positions:
-                for pair, volume in agent.positions.items():
-                    if volume > 1e-9:
-                        last_price = self.data_manager.ohlc_data[pair]["close"].iloc[-1]
-                        position_value = volume * last_price
-                        final_positions_value += position_value
+        header = f"| {'Strategy':<25} | {'Net P/L ($)':>15} | {'Net P/L (%)':>15} | {'Trades':>8} |"
+        separator = "-" * len(header)
+        logger.info(separator)
+        logger.info(header)
+        logger.info(separator)
 
-            net_profit = profit + final_positions_value
-            # Note: This is a simplified P&L calculation. A real backtest would track
-            # the balance changes per agent, but this gives a good per-agent performance metric.
+        for result in sorted(results, key=lambda x: x["net_profit"], reverse=True):
+            row = (
+                f"| {result['strategy']:<25} | "
+                f"${result['net_profit']:>14,.2f} | "
+                f"{result['profit_pct']:>14.2f}% | "
+                f"{result['trades']:>8} |"
+            )
+            logger.info(row)
 
-            logger.info(f"--- Results for {agent.name} ---")
-            logger.info(f"Total Trades Executed: {len(agent_trades)}")
-            logger.info(f"Net Profit/Loss: ${net_profit:,.2f}")
-
-            if agent.positions:
-                logger.info("Ending positions held by this agent:")
-                for pair, volume in agent.positions.items():
-                    if volume > 1e-9:
-                        last_price = self.data_manager.ohlc_data[pair]["close"].iloc[-1]
-                        position_value = volume * last_price
-                        logger.info(
-                            f"  - {pair}: {volume:.4f} units @ ${last_price:,.2f} = ${position_value:,.2f}"
-                        )
-
-        logger.info("------------------------")
+        logger.info(separator)

@@ -23,7 +23,7 @@ class AgentManager:
         """
         Load all the trading agents that are defined in the configuration.
         """
-        # Agent 1: Standard Momentum Bot (10-hour / 20-hour MA crossover)
+        # Agent 1: Standard Momentum Bot
         momentum_bot_config = {
             "pairs": ["XBTUSD", "ETHUSD"],
             "rsi_period": 14,
@@ -31,6 +31,7 @@ class AgentManager:
             "rsi_overbought": 70,
             "ma_fast_hours": 10,
             "ma_slow_hours": 20,
+            "trend_filter_ema_hours": 200,  # Long-term trend filter
             "min_confidence": 0.5,
         }
         self.agents[1] = MomentumBot(
@@ -39,7 +40,7 @@ class AgentManager:
             trading_client=self.trading_client,
         )
 
-        # Agent 2: A faster, more aggressive Momentum Bot (5-hour / 10-hour MA crossover)
+        # Agent 2: A faster, more aggressive Momentum Bot
         momentum_bot_fast_config = {
             "pairs": ["XBTUSD", "ETHUSD"],
             "rsi_period": 14,
@@ -47,6 +48,7 @@ class AgentManager:
             "rsi_overbought": 70,
             "ma_fast_hours": 5,
             "ma_slow_hours": 10,
+            "trend_filter_ema_hours": 100,  # Shorter long-term trend filter
             "min_confidence": 0.5,
         }
         self.agents[2] = MomentumBot(
